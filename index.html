@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0b1220">
+<meta name="mobile-web-app-capable" content="yes">
+<title>PresIA · Control</title>
+<!--
+  control/index.html — PresIA · Control desde el celular v1.0.0 (19-nov-2026)
+  Repo: goeapp/presentaciones → https://goeapp.github.io/presentaciones/control/
+  Se abre escaneando el QR de la pantalla de inicio de la presentación (PresIA v1.2.0 o posterior).
+  · Login por código (Supabase Auth, mismo flujo que M2 / GOE Admin), solo admin global → pres_es_presentador().
+  · Habla con el proyector por un canal de Realtime (broadcast) 'pres-<código del QR>'. No usa tablas.
+  · Foto del auditorio: se achica a 1920 px, se sube al bucket privado "pres" y el proyector
+    recibe un enlace temporal (6 h) para ponerla de fondo en la diapositiva de cierre.
+  Requiere en Supabase: pres_esquema_v1_0_0.sql + https://goeapp.github.io/presentaciones/ en Redirect URLs.
+-->
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js"></script>
+<style>
+:root{
+  --bg:#0b1220; --surface:#111b2e; --surface2:#172338; --border:rgba(255,255,255,.10);
+  --accent:#d97706; --accent2:#fbbf24; --text:#e2e8f0; --muted:#94a3b8;
+  --ok:#22c55e; --danger:#ef4444; --naranja:#F29111; --rojo:#C20F2F;
+  --degrade:linear-gradient(100deg,#F29111,#C20F2F 28%,#8E3FB0 52%,#2E86DE 76%,#17A589);
+  --radius:16px; --pie:96px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);font-family:'DM Sans',system-ui,sans-serif;font-size:15px;line-height:1.45;-webkit-tap-highlight-color:transparent;overflow:hidden}
+button,input{font:inherit;color:inherit}
+button{cursor:pointer}
+[hidden]{display:none!important}
+
+/* Pantallas de entrada (mismo flujo que M2) */
+.pantalla{display:none;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:20px;gap:16px;overflow-y:auto}
+.pantalla.activa{display:flex}
+.caja{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:30px 24px;max-width:400px;width:100%;text-align:center}
+.tit{font-family:'Bebas Neue',sans-serif;font-size:2.3rem;letter-spacing:4px;line-height:1;color:var(--accent2)}
+.tit span{color:var(--text)}
+.sub{font-size:.8rem;color:var(--muted);margin:4px 0 22px}
+.paso{text-align:left}
+.paso label{display:block;font-size:.72rem;font-weight:700;color:var(--muted);margin:10px 0 4px;text-transform:uppercase;letter-spacing:.06em}
+.inp{width:100%;font-size:17px;padding:12px;border:1.5px solid var(--border);border-radius:10px;background:var(--surface2);outline:none}
+.inp:focus{border-color:var(--accent)}
+.inp.codigo{letter-spacing:8px;font-size:26px;text-align:center;font-family:'Courier New',monospace;font-weight:700}
+.btn-gr{width:100%;margin-top:14px;padding:13px 16px;border:0;border-radius:10px;background:var(--accent);color:#fff;font-size:1rem;font-weight:700}
+.btn-gr:disabled{opacity:.55}
+.btn-gr.sec{background:transparent;color:var(--muted);border:1px solid var(--border);font-weight:500;margin-top:8px}
+.msg{font-size:.82rem;margin-top:10px;padding:8px 10px;border-radius:8px}
+.msg:empty{display:none}
+.msg.error{background:rgba(239,68,68,.15);color:#fecaca}
+.msg.info{background:rgba(217,119,6,.15);color:#fde68a}
+.msg.ok{background:rgba(34,197,94,.15);color:#bbf7d0}
+.enviado{font-size:.85rem;color:var(--muted)}
+.enviado b{color:var(--text)}
+.pie-ver{font-size:.7rem;color:var(--muted)}
+
+/* App */
+#app{display:none;flex-direction:column;height:100%}
+#app.activa{display:flex}
+#hdr{height:48px;flex-shrink:0;display:flex;align-items:center;gap:10px;padding:0 10px 0 14px;border-bottom:1px solid var(--border);background:var(--surface)}
+.hdr-tit{font-family:'Bebas Neue',sans-serif;font-size:1.4rem;letter-spacing:3px;color:var(--accent2);line-height:1}
+.hdr-est{flex:1;min-width:0;display:flex;align-items:center;gap:7px;font-size:.78rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.punto{width:10px;height:10px;border-radius:50%;background:#64748b;flex-shrink:0}
+.punto.ok{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.punto.esp{background:var(--accent);animation:latido 1s ease infinite}
+.punto.err{background:var(--danger)}
+@keyframes latido{50%{opacity:.35}}
+.hb{width:38px;height:34px;border-radius:9px;border:1px solid var(--border);background:transparent;font-size:1.1rem;display:flex;align-items:center;justify-content:center}
+
+#cuerpo{flex:1;overflow-y:auto;padding:14px 14px calc(var(--pie) + 18px);display:flex;flex-direction:column;gap:12px}
+.tarjeta{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
+.etq{font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:.2em;color:var(--muted)}
+.etq b{color:var(--rojo);font-weight:400}
+#palabra{font-weight:700;font-size:2.5rem;letter-spacing:-.03em;line-height:1.1;margin:4px 0 2px;
+  background:var(--degrade);-webkit-background-clip:text;background-clip:text;color:transparent;word-break:break-word}
+#palabra.gris{background:none;color:var(--text);font-size:1.6rem}
+#detalle{font-size:.9rem;color:var(--muted);min-height:1.3em}
+#detalle b{color:var(--text)}
+/* Tiempo de bloque (igual que el proyector) */
+.riel{height:3px;border-radius:3px;background:rgba(255,255,255,.12);position:relative;margin:14px 6px 12px}
+.riel .lleno{position:absolute;left:0;top:0;bottom:0;width:0;border-radius:3px;background:var(--degrade);opacity:.75}
+.riel .pto{position:absolute;top:50%;left:0;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;background:#fff;box-shadow:0 0 10px rgba(255,255,255,.4)}
+.riel.aviso .pto{background:var(--naranja);box-shadow:0 0 12px rgba(242,145,17,.7);animation:t80 1.2s ease-in-out infinite}
+.pausado .riel .pto{animation:none}
+@keyframes t80{50%{opacity:.35}}
+#siguiente{font-size:.9rem;color:var(--muted)}
+#siguiente b{color:var(--text)}
+
+.fila-reloj{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+#rTrans{font-family:'Bebas Neue',sans-serif;font-size:3rem;letter-spacing:.05em;line-height:1}
+#rResta{font-size:.9rem;color:var(--muted);font-weight:500}
+#rResta.pasado{color:#fff;background:var(--rojo);border-radius:999px;padding:2px 10px;font-weight:700}
+#rPausa{margin-left:auto;font-size:.72rem;font-weight:700;letter-spacing:.12em;color:var(--accent2)}
+.seg3{display:flex;margin-top:12px;border:1px solid var(--border);border-radius:11px;overflow:hidden}
+.seg3 button{flex:1;padding:10px 4px;border:0;background:transparent;font-size:.86rem;font-weight:500;color:var(--muted)}
+.seg3 button+button{border-left:1px solid var(--border)}
+.seg3 button.on{background:var(--accent);color:#fff;font-weight:700}
+.lbl{font-size:.72rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
+#notas{font-size:1.06rem;line-height:1.55;white-space:pre-line;color:var(--text)}
+#notas.vacio{color:var(--muted);font-size:.9rem}
+.partes{display:flex;gap:6px;margin-top:10px}
+.partes button{flex:1;padding:9px 0;border-radius:10px;border:1px solid var(--border);background:var(--surface2);font-size:.82rem;font-weight:700}
+.partes button.on{border-color:var(--accent);color:var(--accent2)}
+#btnFoto{width:100%;padding:14px;border-radius:12px;border:1px dashed rgba(251,191,36,.55);background:rgba(217,119,6,.08);font-weight:700;font-size:1rem;color:var(--accent2)}
+#fotoEst{display:flex;align-items:center;gap:12px;margin-top:10px;font-size:.85rem;color:var(--muted)}
+#fotoEst img{width:64px;height:48px;object-fit:cover;border-radius:8px}
+#fotoEst:empty{display:none}
+
+/* Botones grandes abajo */
+#pie{position:fixed;left:0;right:0;bottom:0;height:var(--pie);padding:10px 12px calc(10px + env(safe-area-inset-bottom));display:grid;grid-template-columns:1fr 1.25fr 1fr;gap:10px;
+  background:linear-gradient(transparent,var(--bg) 22%);z-index:5}
+#pie button{border:0;border-radius:18px;font-size:1.7rem;font-weight:700;background:var(--surface2);border:1px solid var(--border);color:var(--text);touch-action:manipulation}
+#pie button:active{transform:scale(.97)}
+#bPlay{background:var(--accent)!important;color:#fff!important;border-color:var(--accent)!important}
+#pie button:disabled{opacity:.4}
+
+.spin{width:16px;height:16px;border:2.5px solid rgba(255,255,255,.2);border-top-color:var(--accent2);border-radius:50%;animation:gira .8s linear infinite;display:inline-block;flex-shrink:0}
+@keyframes gira{to{transform:rotate(360deg)}}
+#toast{position:fixed;bottom:calc(var(--pie) + 14px);left:50%;transform:translateX(-50%) translateY(16px);background:#1e293b;border:1px solid var(--border);color:#fff;padding:10px 16px;border-radius:10px;font-size:.86rem;opacity:0;pointer-events:none;transition:all .25s;z-index:60;max-width:calc(100% - 28px);text-align:center}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+#toast.error{background:var(--danger)}
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-end;justify-content:center;z-index:50}
+#modal.abierto{display:flex}
+.modal{background:var(--surface);border-radius:18px 18px 0 0;width:100%;max-width:520px;padding:18px 16px calc(18px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:8px}
+.modal .m-tit{font-family:'Bebas Neue',sans-serif;font-size:1.4rem;letter-spacing:1px}
+.modal .nota{font-size:.8rem;color:var(--muted);margin-bottom:6px}
+.modal button{padding:13px;border-radius:11px;border:1px solid var(--border);background:var(--surface2);font-weight:600;text-align:left}
+.modal button.peligro{color:#fecaca;border-color:rgba(239,68,68,.4)}
+</style>
+</head>
+<body>
+
+<!-- 1. LOGIN (mismo flujo que M2) -->
+<section class="pantalla" id="pt-login">
+  <div class="caja">
+    <div class="tit">PRES<span>IA</span></div>
+    <div class="sub">Control desde el celular · entrar con tu mail</div>
+    <div class="paso" id="login-paso-email">
+      <label for="login-email">Email</label>
+      <input class="inp" id="login-email" type="email" autocomplete="email">
+      <button class="btn-gr" id="login-enviar" type="button">Enviar código</button>
+      <div class="msg" id="login-msg-email"></div>
+    </div>
+    <div class="paso" id="login-paso-codigo" hidden>
+      <div class="enviado">Te mandamos un código a <b id="login-email-enviado"></b>. Revisá también Spam.</div>
+      <label for="login-codigo">Código</label>
+      <input class="inp codigo" id="login-codigo" inputmode="numeric" autocomplete="one-time-code" maxlength="10">
+      <button class="btn-gr" id="login-validar" type="button">Ingresar</button>
+      <button class="btn-gr sec" id="login-volver" type="button">Cambiar email</button>
+      <div class="msg" id="login-msg-codigo"></div>
+    </div>
+  </div>
+  <div class="pie-ver" id="pie-ver"></div>
+</section>
+
+<!-- 2. SIN PERMISO -->
+<section class="pantalla" id="pt-denegado">
+  <div class="caja">
+    <div style="font-size:2.6rem">🔒</div>
+    <div style="font-weight:700;margin:8px 0">El control es solo para el administrador global</div>
+    <div class="enviado" id="denegado-email"></div>
+    <button class="btn-gr sec" type="button" id="denegado-salir">Cerrar sesión</button>
+  </div>
+</section>
+
+<!-- 3. SIN CÓDIGO DE PRESENTACIÓN -->
+<section class="pantalla" id="pt-codigo">
+  <div class="caja">
+    <div class="tit">PRES<span>IA</span></div>
+    <div class="sub">¿Qué presentación querés manejar?</div>
+    <div class="paso">
+      <div class="enviado">Escaneá el <b>QR</b> de la pantalla de inicio de la presentación, o escribí el código que aparece debajo del QR.</div>
+      <label for="pres-codigo">Código de la presentación</label>
+      <input class="inp codigo" id="pres-codigo" maxlength="9" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button class="btn-gr" id="pres-ok" type="button">Conectar</button>
+      <div class="msg" id="pres-msg"></div>
+    </div>
+  </div>
+</section>
+
+<!-- 4. APP -->
+<div id="app">
+  <header id="hdr">
+    <span class="hdr-tit">PRESIA</span>
+    <span class="hdr-est"><span class="punto" id="hPunto"></span><span id="hEst">Buscando la presentación…</span></span>
+    <button class="hb" id="hMenu" type="button" title="Menú">⋮</button>
+  </header>
+  <main id="cuerpo">
+    <section class="tarjeta" id="tActual">
+      <div class="etq" id="etq">—</div>
+      <div id="palabra" class="gris">Esperando la presentación</div>
+      <div id="detalle">Abrí la presentación en la PC y escaneá el QR de la pantalla de inicio.</div>
+      <div class="riel" id="riel"><div class="lleno"></div><i class="pto"></i></div>
+      <div id="siguiente"></div>
+    </section>
+    <section class="tarjeta">
+      <div class="fila-reloj"><span id="rTrans">00:00</span><span id="rResta">restan 06:00</span><span id="rPausa"></span></div>
+      <div class="lbl" style="margin:12px 0 0">Reloj en el proyector</div>
+      <div class="seg3" id="seg3">
+        <button type="button" data-reloj="digital">Digital</button>
+        <button type="button" data-reloj="cuadros">Cuadrados</button>
+        <button type="button" data-reloj="apagado">Apagado</button>
+      </div>
+      <div class="partes" id="partes">
+        <button type="button" data-parte="1">Parte 1</button>
+        <button type="button" data-parte="2">Parte 2</button>
+        <button type="button" data-parte="3">Parte 3</button>
+      </div>
+    </section>
+    <section class="tarjeta">
+      <div class="lbl">Ayuda memoria</div>
+      <div id="notas" class="vacio">Acá aparece lo que escribiste para cada palabra.</div>
+    </section>
+    <section class="tarjeta">
+      <button id="btnFoto" type="button">📷 Foto del auditorio</button>
+      <div id="fotoEst"></div>
+      <div class="nota" style="font-size:.76rem;color:var(--muted);margin-top:8px">La foto aparece de fondo en la diapositiva de cierre. Queda guardada en Supabase (Storage → pres).</div>
+    </section>
+  </main>
+  <nav id="pie">
+    <button id="bAnt" type="button" title="Anterior">◀</button>
+    <button id="bPlay" type="button" title="Pausa / play">▶</button>
+    <button id="bSig" type="button" title="Siguiente">▶▶</button>
+  </nav>
+</div>
+
+<input type="file" id="archivoFoto" accept="image/*" capture="environment" hidden>
+<div id="modal"><div class="modal" id="modalCaja"></div></div>
+<div id="toast"></div>
+
+<script>
+'use strict';
+/* ════════════════════════════════════════════════════════
+   CONFIGURACIÓN (la misma conexión que M2 / PWAgoe)
+════════════════════════════════════════════════════════ */
+const VERSION_UI     = 'v1.0.0';
+const SUPABASE_URL   = 'https://uhuftsxrzwhmvzygcuvp.supabase.co';
+const SUPABASE_KEY   = 'sb_publishable_TCibRAnzgaDIbn_MIirw6w_FltKG8X3';
+const REDIRECT_MAIL  = 'https://goeapp.github.io/presentaciones/';   // = goe_apps.url de "pres": la plantilla del mail pone "PRESIA"
+const EMAIL_SUGERIDO = 'goecdg@gmail.com';
+const BUCKET         = 'pres';
+const FOTO_MAX_PX    = 1920, FOTO_CALIDAD = 0.85, FOTO_ENLACE_S = 6 * 3600;
+const LATIDO_MS = 4000, SIN_ESTADO_MS = 5000;
+const LS = { codigo: 'pres-codigo' };
+
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true, storageKey: 'pres-sb-auth' }
+});
+
+/* ════════════════════════════════════════════════════════
+   ESTADO
+════════════════════════════════════════════════════════ */
+const st = { email: '', codigo: '', canal: null, rt: 'off', ultEstado: 0, est: null, foto: null, wake: null, timers: [] };
+let emailPendiente = '';
+
+/* ════════════════════════════════════════════════════════
+   UTILIDADES (de M2)
+════════════════════════════════════════════════════════ */
+const $ = id => document.getElementById(id);
+const log = (...a) => console.log('[PresIA]', ...a);
+function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function lsSet(k, v) { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) { /* sin storage */ } }
+function toast(m, error) {
+  const t = $('toast'); t.textContent = m; t.className = error ? 'error show' : 'show';
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.className = error ? 'error' : '', error ? 5000 : 2600);
+}
+function textoError(err) {
+  const m = (err && (err.message || err.msg || err.error_description || err.details)) || String(err);
+  if (/JWT|session|token/i.test(m)) return 'La sesión venció. Volvé a ingresar.';
+  if (/Failed to fetch|NetworkError|network|Load failed/i.test(m)) return 'Sin conexión con la base.';
+  if (/row-level security|permission denied|42501|sin permiso/i.test(m)) return 'Sin permiso para esa operación.';
+  if (/Payload too large|exceeded the maximum|too large/i.test(m)) return 'La foto es demasiado grande.';
+  if (/mime type|invalid_mime/i.test(m)) return 'Ese tipo de archivo no está permitido.';
+  return m;
+}
+async function q(promesa) { const { data, error } = await promesa; if (error) throw error; return data; }
+const pad = n => String(Math.floor(n)).padStart(2, '0');
+const mmss = s => pad(s / 60) + ':' + pad(s % 60);
+function vibrar() { try { navigator.vibrate && navigator.vibrate(12); } catch (e) { /* nada */ } }
+function pantalla(cual) {
+  document.querySelectorAll('.pantalla').forEach(p => p.classList.toggle('activa', p.id === 'pt-' + cual));
+  $('app').classList.toggle('activa', cual === 'app');
+}
+function msg(id, tipo, texto) { const el = $(id); el.className = 'msg ' + (tipo || ''); el.textContent = texto || ''; }
+
+/* ════════════════════════════════════════════════════════
+   CÓDIGO DE LA PRESENTACIÓN (viene en el QR: ?c=xxxxxxxx)
+════════════════════════════════════════════════════════ */
+function limpiarCodigo(c) { return String(c || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8); }
+function codigoInicial() {
+  const c = limpiarCodigo(new URLSearchParams(location.search).get('c'));
+  if (c.length === 8) { lsSet(LS.codigo, c); history.replaceState(null, '', location.pathname); return c; }
+  const g = limpiarCodigo(lsGet(LS.codigo));
+  return g.length === 8 ? g : '';
+}
+
+/* ════════════════════════════════════════════════════════
+   LOGIN (mismo flujo que M2 v1.0.1)
+════════════════════════════════════════════════════════ */
+function pasoLogin(p) { $('login-paso-email').hidden = p !== 'email'; $('login-paso-codigo').hidden = p !== 'codigo'; }
+function traducirErrorAuth(err) {
+  const m = (err && (err.message || err.msg)) || String(err);
+  if (/rate limit|too many|security purposes/i.test(m)) return 'Demasiados pedidos de código seguidos. Esperá un minuto y probá de nuevo.';
+  if (/expired|invalid/i.test(m)) return 'Código incorrecto o vencido.';
+  return textoError(err);
+}
+function mostrarLogin() { pantalla('login'); if (!$('login-email').value) $('login-email').value = EMAIL_SUGERIDO; pasoLogin('email'); }
+async function enviarCodigoMail() {
+  const email = $('login-email').value.trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { msg('login-msg-email', 'error', 'Ingresá un email válido.'); return; }
+  $('login-enviar').disabled = true; msg('login-msg-email', 'info', 'Enviando código…');
+  const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true, emailRedirectTo: REDIRECT_MAIL } });
+  $('login-enviar').disabled = false;
+  if (error) { console.error('[PresIA signInWithOtp]', error); msg('login-msg-email', 'error', traducirErrorAuth(error)); return; }
+  emailPendiente = email; msg('login-msg-email', '', ''); msg('login-msg-codigo', '', '');
+  $('login-email-enviado').textContent = email; $('login-codigo').value = '';
+  pasoLogin('codigo'); $('login-codigo').focus();
+}
+async function validarCodigoMail() {
+  const token = $('login-codigo').value.replace(/\D/g, '');
+  if (token.length < 6) { msg('login-msg-codigo', 'error', 'El código tiene al menos 6 dígitos.'); return; }
+  $('login-validar').disabled = true; msg('login-msg-codigo', 'info', 'Validando…');
+  const { data, error } = await sb.auth.verifyOtp({ email: emailPendiente, token, type: 'email' });
+  $('login-validar').disabled = false;
+  if (error) { console.error('[PresIA verifyOtp]', error); msg('login-msg-codigo', 'error', traducirErrorAuth(error)); return; }
+  msg('login-msg-codigo', '', '');
+  await entrar(data.session);
+}
+async function entrar(ses) {
+  const email = (ses.user.email || '').toLowerCase();
+  const { data, error } = await sb.rpc('pres_es_presentador');
+  if (error) { console.error('[PresIA pres_es_presentador]', error); mostrarLogin(); msg('login-msg-email', 'error', 'No se pudo verificar el acceso: ' + textoError(error)); return; }
+  if (data !== true) { pantalla('denegado'); $('denegado-email').textContent = email; return; }
+  st.email = email;
+  if (!st.codigo) { pantalla('codigo'); $('pres-codigo').focus(); return; }
+  iniciarApp();
+}
+async function salir() {
+  try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { log('signOut', e); }
+  desconectar(); mostrarLogin();
+}
+
+/* ════════════════════════════════════════════════════════
+   CANAL CON EL PROYECTOR (Realtime broadcast)
+════════════════════════════════════════════════════════ */
+function iniciarApp() {
+  pantalla('app'); conectar();
+  st.timers.forEach(clearInterval); st.timers = [];
+  st.timers.push(setInterval(() => enviar('latido', {}), LATIDO_MS));
+  st.timers.push(setInterval(pintarConexion, 1000));
+  pedirWakeLock();
+}
+function desconectar() {
+  st.timers.forEach(clearInterval); st.timers = [];
+  if (st.canal) { try { sb.removeChannel(st.canal); } catch (e) { /* nada */ } st.canal = null; }
+}
+function conectar() {
+  if (st.canal) { try { sb.removeChannel(st.canal); } catch (e) { /* nada */ } }
+  st.rt = 'esp'; pintarConexion();
+  st.canal = sb.channel('pres-' + st.codigo, { config: { broadcast: { self: false, ack: false } } })
+    .on('broadcast', { event: 'estado' }, m => { st.ultEstado = Date.now(); st.est = m.payload || {}; pintar(); })
+    .on('broadcast', { event: 'proyector' }, () => { enviar('hola', {}); reenviarFoto(); })
+    .on('broadcast', { event: 'foto-ok' }, () => { fotoEstado('ok'); })
+    .on('broadcast', { event: 'foto-error' }, () => { fotoEstado('error'); })
+    .subscribe(s => {
+      log('rt', s);
+      if (s === 'SUBSCRIBED') { st.rt = 'ok'; enviar('hola', {}); reenviarFoto(); }
+      else if (s === 'CHANNEL_ERROR' || s === 'TIMED_OUT' || s === 'CLOSED') {
+        st.rt = 'err'; clearTimeout(conectar._t); conectar._t = setTimeout(() => { if (document.visibilityState === 'visible') conectar(); }, 6000);
+      }
+      pintarConexion();
+    });
+}
+function enviar(evento, datos) { try { if (st.canal) st.canal.send({ type: 'broadcast', event: evento, payload: datos }); } catch (e) { log('enviar', e); } }
+function cmd(accion, valor) { vibrar(); enviar('cmd', { accion, valor }); }
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !$('app').classList.contains('activa')) return;
+  if (st.rt !== 'ok') conectar(); else enviar('hola', {});
+  pedirWakeLock();
+});
+function pintarConexion() {
+  const vivo = Date.now() - st.ultEstado < SIN_ESTADO_MS;
+  const p = $('hPunto'), t = $('hEst');
+  if (st.rt === 'err') { p.className = 'punto err'; t.textContent = 'Sin conexión: reintentando…'; }
+  else if (vivo) { p.className = 'punto ok'; t.textContent = 'Presentación conectada · ' + st.codigo.slice(0, 4) + ' ' + st.codigo.slice(4); }
+  else { p.className = 'punto esp'; t.textContent = 'Buscando la presentación ' + st.codigo.slice(0, 4) + ' ' + st.codigo.slice(4) + '…'; }
+  ['bAnt', 'bPlay', 'bSig'].forEach(id => $(id).disabled = !vivo);
+}
+
+/* ════════════════════════════════════════════════════════
+   PINTAR EL ESTADO QUE MANDA EL PROYECTOR
+════════════════════════════════════════════════════════ */
+function pintar() {
+  const e = st.est || {};
+  const P = $('palabra');
+  let etq = '—', pal = '', det = '', sig = '';
+  if (!e.enCurso) { etq = 'PANTALLA DE INICIO'; pal = 'Lista para empezar'; det = 'Apretá <b>Comenzar</b> en la PC (así entra a pantalla completa) o ▶ acá.'; }
+  else if (e.tipo === 'diapo0') { etq = 'DIAPOSITIVA 0'; pal = 'Inicio'; det = 'El reloj arranca con la primera palabra.'; sig = e.siguiente; }
+  else if (e.tipo === 'fin') { etq = 'DIAPOSITIVA DE CIERRE'; pal = 'Cierre'; det = e.foto ? 'Con la foto del auditorio de fondo.' : 'Podés mandar la foto del auditorio.'; }
+  else if (e.tipo === 'cierre') { etq = 'FRASES DE CIERRE'; pal = 'Cierre'; sig = e.siguiente; }
+  else { etq = `PARTE ${e.parte} · <b>${pad(e.n)}</b> / ${pad(e.total)}`; pal = e.palabra; det = e.img ? `Imagen <b>${e.img.k}</b> / ${e.img.n}` : ''; sig = e.siguiente; }
+  $('etq').innerHTML = etq;
+  P.textContent = pal; P.className = e.tipo === 'palabra' ? '' : 'gris';
+  $('detalle').innerHTML = det;
+  $('siguiente').innerHTML = sig ? 'Siguiente: <b></b>' : ''; if (sig) $('siguiente').querySelector('b').textContent = sig;
+  const r = e.tipo === 'palabra' ? (e.r || 0) : 0;
+  $('riel').hidden = e.tipo !== 'palabra';
+  $('riel').querySelector('.pto').style.left = (r * 100) + '%';
+  $('riel').querySelector('.lleno').style.width = (r * 100) + '%';
+  $('riel').classList.toggle('aviso', r >= .8);
+  document.body.classList.toggle('pausado', !!e.pausado);
+  // Reloj
+  const trans = e.trans || 0, resta = (e.plan || 360) - trans;
+  $('rTrans').textContent = mmss(trans);
+  $('rResta').textContent = resta >= 0 ? 'restan ' + mmss(resta) : 'excedido +' + mmss(-resta);
+  $('rResta').classList.toggle('pasado', resta < 0);
+  $('rPausa').textContent = e.enCurso && e.pausado && e.tipo === 'palabra' ? '❚❚ EN PAUSA' : '';
+  document.querySelectorAll('#seg3 button').forEach(b => b.classList.toggle('on', b.dataset.reloj === e.reloj));
+  document.querySelectorAll('#partes button').forEach(b => b.classList.toggle('on', String(e.parte) === b.dataset.parte && e.tipo === 'palabra'));
+  // Notas
+  const n = $('notas');
+  if (e.notas) { n.textContent = e.notas; n.className = ''; }
+  else { n.textContent = e.tipo === 'palabra' ? 'Sin notas para esta palabra.' : 'Acá aparece lo que escribiste para cada palabra.'; n.className = 'vacio'; }
+  // Botón central
+  $('bPlay').textContent = !e.enCurso || e.tipo === 'diapo0' ? '▶' : e.tipo === 'fin' ? '■' : e.pausado ? '▶' : '❚❚';
+  pintarConexion();
+}
+
+/* ════════════════════════════════════════════════════════
+   FOTO DEL AUDITORIO
+════════════════════════════════════════════════════════ */
+function achicar(file) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file), im = new Image();
+    im.onload = () => {
+      const k = Math.min(1, FOTO_MAX_PX / Math.max(im.naturalWidth, im.naturalHeight));
+      const cv = document.createElement('canvas');
+      cv.width = Math.round(im.naturalWidth * k); cv.height = Math.round(im.naturalHeight * k);
+      cv.getContext('2d').drawImage(im, 0, 0, cv.width, cv.height);
+      cv.toBlob(b => { URL.revokeObjectURL(url); b ? res(b) : rej(new Error('No se pudo procesar la foto')); }, 'image/jpeg', FOTO_CALIDAD);
+    };
+    im.onerror = () => { URL.revokeObjectURL(url); rej(new Error('La foto no se pudo leer')); };
+    im.src = url;
+  });
+}
+function fotoEstado(tipo, texto) {
+  const el = $('fotoEst'), mini = st.foto && st.foto.mini ? `<img src="${st.foto.mini}" alt="">` : '';
+  const txt = texto || { sube: 'Subiendo…', espera: 'Enviada: esperando a la presentación…', ok: '✓ La presentación recibió la foto', error: 'La presentación no pudo abrir la foto' }[tipo] || '';
+  el.innerHTML = mini + (tipo === 'sube' ? '<span class="spin"></span>' : '') + `<span>${txt}</span>`;
+}
+async function tomarFoto(file) {
+  if (!file) return;
+  $('btnFoto').disabled = true;
+  try {
+    const blob = await achicar(file);
+    if (st.foto && st.foto.mini) URL.revokeObjectURL(st.foto.mini);
+    st.foto = { mini: URL.createObjectURL(blob), url: '' };
+    fotoEstado('sube');
+    const d = new Date();
+    const ruta = `fotos/${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.jpg`;
+    await q(sb.storage.from(BUCKET).upload(ruta, blob, { contentType: 'image/jpeg', upsert: false }));
+    const firmado = await q(sb.storage.from(BUCKET).createSignedUrl(ruta, FOTO_ENLACE_S));
+    st.foto.url = firmado.signedUrl;
+    log('foto subida', ruta, Math.round(blob.size / 1024) + ' KB');
+    enviar('foto', { url: st.foto.url }); fotoEstado('espera');
+  } catch (e) {
+    console.error('[PresIA foto]', e);
+    fotoEstado('error', 'No se pudo subir: ' + textoError(e)); toast('No se pudo subir la foto: ' + textoError(e), true);
+  } finally { $('btnFoto').disabled = false; }
+}
+function reenviarFoto() { if (st.foto && st.foto.url) enviar('foto', { url: st.foto.url }); }
+
+/* ════════════════════════════════════════════════════════
+   MENÚ · WAKE LOCK
+════════════════════════════════════════════════════════ */
+function menu() {
+  const caja = $('modalCaja');
+  caja.innerHTML = `<div class="m-tit">PresIA · Control ${VERSION_UI}</div>
+    <div class="nota">Entraste como <b>${st.email.replace(/</g, '&lt;')}</b> · presentación ${st.codigo.slice(0, 4)} ${st.codigo.slice(4)}</div>
+    <button type="button" data-m="otra">Conectar a otra presentación</button>
+    <button type="button" data-m="recargar">Recargar</button>
+    <button type="button" data-m="salir" class="peligro">Cerrar sesión</button>
+    <button type="button" data-m="cerrar">Cerrar</button>`;
+  $('modal').classList.add('abierto');
+  caja.querySelectorAll('[data-m]').forEach(b => b.onclick = () => {
+    $('modal').classList.remove('abierto');
+    const m = b.dataset.m;
+    if (m === 'otra') { desconectar(); st.codigo = ''; lsSet(LS.codigo, null); $('pres-codigo').value = ''; pantalla('codigo'); }
+    if (m === 'recargar') location.reload();
+    if (m === 'salir') salir();
+  });
+}
+async function pedirWakeLock() {
+  if (!('wakeLock' in navigator) || document.visibilityState !== 'visible') return;
+  try { if (st.wake && !st.wake.released) return; st.wake = await navigator.wakeLock.request('screen'); } catch (e) { log('wake lock', e.message); }
+}
+
+/* ════════════════════════════════════════════════════════
+   ARRANQUE
+════════════════════════════════════════════════════════ */
+window.addEventListener('load', async () => {
+  $('pie-ver').textContent = 'PresIA · Control ' + VERSION_UI;
+  $('login-enviar').onclick = enviarCodigoMail;
+  $('login-email').onkeydown = e => { if (e.key === 'Enter') enviarCodigoMail(); };
+  $('login-validar').onclick = validarCodigoMail;
+  $('login-codigo').onkeydown = e => { if (e.key === 'Enter') validarCodigoMail(); };
+  $('login-volver').onclick = () => pasoLogin('email');
+  $('denegado-salir').onclick = salir;
+  $('pres-ok').onclick = () => {
+    const c = limpiarCodigo($('pres-codigo').value);
+    if (c.length !== 8) { msg('pres-msg', 'error', 'El código tiene 8 letras y números (está debajo del QR).'); return; }
+    st.codigo = c; lsSet(LS.codigo, c); msg('pres-msg', '', ''); iniciarApp();
+  };
+  $('pres-codigo').onkeydown = e => { if (e.key === 'Enter') $('pres-ok').click(); };
+  $('bAnt').onclick = () => cmd('ant');
+  $('bPlay').onclick = () => cmd('play');
+  $('bSig').onclick = () => cmd('sig');
+  document.querySelectorAll('#seg3 button').forEach(b => b.onclick = () => cmd('reloj', b.dataset.reloj));
+  document.querySelectorAll('#partes button').forEach(b => b.onclick = () => cmd('parte', b.dataset.parte));
+  $('btnFoto').onclick = () => $('archivoFoto').click();
+  $('archivoFoto').onchange = () => { tomarFoto($('archivoFoto').files[0]); $('archivoFoto').value = ''; };
+  $('hMenu').onclick = menu;
+  $('modal').onclick = e => { if (e.target.id === 'modal') $('modal').classList.remove('abierto'); };
+  st.codigo = codigoInicial();
+  try {
+    const { data } = await sb.auth.getSession();
+    if (data.session && !data.session.user.is_anonymous) await entrar(data.session); else mostrarLogin();
+  } catch (e) { console.error('[PresIA arrancar]', e); mostrarLogin(); toast('No se pudo arrancar: ' + textoError(e), true); }
+});
+</script>
+</body>
+</html>
