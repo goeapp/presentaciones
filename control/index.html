@@ -7,7 +7,8 @@
 <meta name="mobile-web-app-capable" content="yes">
 <title>PresIA · Control</title>
 <!--
-  control/index.html — PresIA · Control desde el celular v1.0.0 (19-nov-2026)
+  control/index.html — PresIA · Control desde el celular v1.0.1 (19-nov-2026)
+  v1.0.1 — botón de foto arriba de todo; botón Inicio (diapositiva 0, reinicia el reloj) junto a Parte 1/2/3.
   Repo: goeapp/presentaciones → https://goeapp.github.io/presentaciones/control/
   Se abre escaneando el QR de la pantalla de inicio de la presentación (PresIA v1.2.0 o posterior).
   · Login por código (Supabase Auth, mismo flujo que M2 / GOE Admin), solo admin global → pres_es_presentador().
@@ -189,6 +190,11 @@ button{cursor:pointer}
     <button class="hb" id="hMenu" type="button" title="Menú">⋮</button>
   </header>
   <main id="cuerpo">
+    <section class="tarjeta">
+      <button id="btnFoto" type="button">📷 Foto del auditorio</button>
+      <div id="fotoEst"></div>
+      <div class="nota" style="font-size:.76rem;color:var(--muted);margin-top:8px">La foto aparece de fondo en la diapositiva de cierre. Queda guardada en Supabase (Storage → pres).</div>
+    </section>
     <section class="tarjeta" id="tActual">
       <div class="etq" id="etq">—</div>
       <div id="palabra" class="gris">Esperando la presentación</div>
@@ -205,6 +211,7 @@ button{cursor:pointer}
         <button type="button" data-reloj="apagado">Apagado</button>
       </div>
       <div class="partes" id="partes">
+        <button type="button" data-parte="inicio" title="Diapositiva 0 (reinicia el reloj)">Inicio</button>
         <button type="button" data-parte="1">Parte 1</button>
         <button type="button" data-parte="2">Parte 2</button>
         <button type="button" data-parte="3">Parte 3</button>
@@ -213,11 +220,6 @@ button{cursor:pointer}
     <section class="tarjeta">
       <div class="lbl">Ayuda memoria</div>
       <div id="notas" class="vacio">Acá aparece lo que escribiste para cada palabra.</div>
-    </section>
-    <section class="tarjeta">
-      <button id="btnFoto" type="button">📷 Foto del auditorio</button>
-      <div id="fotoEst"></div>
-      <div class="nota" style="font-size:.76rem;color:var(--muted);margin-top:8px">La foto aparece de fondo en la diapositiva de cierre. Queda guardada en Supabase (Storage → pres).</div>
     </section>
   </main>
   <nav id="pie">
@@ -236,7 +238,7 @@ button{cursor:pointer}
 /* ════════════════════════════════════════════════════════
    CONFIGURACIÓN (la misma conexión que M2 / PWAgoe)
 ════════════════════════════════════════════════════════ */
-const VERSION_UI     = 'v1.0.0';
+const VERSION_UI     = 'v1.0.1';
 const SUPABASE_URL   = 'https://uhuftsxrzwhmvzygcuvp.supabase.co';
 const SUPABASE_KEY   = 'sb_publishable_TCibRAnzgaDIbn_MIirw6w_FltKG8X3';
 const REDIRECT_MAIL  = 'https://goeapp.github.io/presentaciones/';   // = goe_apps.url de "pres": la plantilla del mail pone "PRESIA"
@@ -419,7 +421,7 @@ function pintar() {
   $('rResta').classList.toggle('pasado', resta < 0);
   $('rPausa').textContent = e.enCurso && e.pausado && e.tipo === 'palabra' ? '❚❚ EN PAUSA' : '';
   document.querySelectorAll('#seg3 button').forEach(b => b.classList.toggle('on', b.dataset.reloj === e.reloj));
-  document.querySelectorAll('#partes button').forEach(b => b.classList.toggle('on', String(e.parte) === b.dataset.parte && e.tipo === 'palabra'));
+  document.querySelectorAll('#partes button').forEach(b => b.classList.toggle('on', b.dataset.parte === 'inicio' ? e.tipo === 'diapo0' : String(e.parte) === b.dataset.parte && e.tipo === 'palabra'));
   // Notas
   const n = $('notas');
   if (e.notas) { n.textContent = e.notas; n.className = ''; }
