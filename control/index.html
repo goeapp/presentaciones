@@ -8,6 +8,8 @@
 <title>PresIA · Control</title>
 <!--
   control/index.html — PresIA · Control desde el celular v1.0.1 (19-nov-2026)
+  v1.0.2 — pastilla del caso y aviso "Caso en pausa"; botón de numeración de pantallas; si la presentación
+           vuelve a la diapositiva 0, olvida la foto (en Supabase queda guardada).
   v1.0.1 — botón de foto arriba de todo; botón Inicio (diapositiva 0, reinicia el reloj) junto a Parte 1/2/3.
   Repo: goeapp/presentaciones → https://goeapp.github.io/presentaciones/control/
   Se abre escaneando el QR de la pantalla de inicio de la presentación (PresIA v1.2.0 o posterior).
@@ -109,6 +111,13 @@ button{cursor:pointer}
 #fotoEst{display:flex;align-items:center;gap:12px;margin-top:10px;font-size:.85rem;color:var(--muted)}
 #fotoEst img{width:64px;height:48px;object-fit:cover;border-radius:8px}
 #fotoEst:empty{display:none}
+#casoBox:empty{display:none}
+#casoBox{margin-top:10px}
+.chip-caso{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:var(--degrade);color:#fff;font-weight:700;font-size:.9rem}
+.banda-caso{padding:12px 14px;border-radius:12px;background:rgba(194,15,47,.18);border:1px solid rgba(194,15,47,.55);font-weight:700;color:#fecaca;animation:latido 1.6s ease infinite}
+.banda-caso b{color:#fff}
+#bNum{width:100%;margin-top:10px;padding:10px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);font-weight:600;font-size:.86rem;color:var(--muted)}
+#bNum.on{border-color:var(--accent);color:var(--accent2)}
 
 /* Botones grandes abajo */
 #pie{position:fixed;left:0;right:0;bottom:0;height:var(--pie);padding:10px 12px calc(10px + env(safe-area-inset-bottom));display:grid;grid-template-columns:1fr 1.25fr 1fr;gap:10px;
@@ -201,6 +210,7 @@ button{cursor:pointer}
       <div id="detalle">Abrí la presentación en la PC y escaneá el QR de la pantalla de inicio.</div>
       <div class="riel" id="riel"><div class="lleno"></div><i class="pto"></i></div>
       <div id="siguiente"></div>
+      <div id="casoBox"></div>
     </section>
     <section class="tarjeta">
       <div class="fila-reloj"><span id="rTrans">00:00</span><span id="rResta">restan 06:00</span><span id="rPausa"></span></div>
@@ -216,6 +226,7 @@ button{cursor:pointer}
         <button type="button" data-parte="2">Parte 2</button>
         <button type="button" data-parte="3">Parte 3</button>
       </div>
+      <button id="bNum" type="button"># Numeración de pantallas: apagada</button>
     </section>
     <section class="tarjeta">
       <div class="lbl">Ayuda memoria</div>
@@ -238,7 +249,7 @@ button{cursor:pointer}
 /* ════════════════════════════════════════════════════════
    CONFIGURACIÓN (la misma conexión que M2 / PWAgoe)
 ════════════════════════════════════════════════════════ */
-const VERSION_UI     = 'v1.0.1';
+const VERSION_UI     = 'v1.0.2';
 const SUPABASE_URL   = 'https://uhuftsxrzwhmvzygcuvp.supabase.co';
 const SUPABASE_KEY   = 'sb_publishable_TCibRAnzgaDIbn_MIirw6w_FltKG8X3';
 const REDIRECT_MAIL  = 'https://goeapp.github.io/presentaciones/';   // = goe_apps.url de "pres": la plantilla del mail pone "PRESIA"
@@ -367,6 +378,10 @@ function conectar() {
     .on('broadcast', { event: 'proyector' }, () => { enviar('hola', {}); reenviarFoto(); })
     .on('broadcast', { event: 'foto-ok' }, () => { fotoEstado('ok'); })
     .on('broadcast', { event: 'foto-error' }, () => { fotoEstado('error'); })
+    .on('broadcast', { event: 'foto-borrada' }, () => {
+      if (st.foto && st.foto.mini) URL.revokeObjectURL(st.foto.mini);
+      st.foto = null; $('fotoEst').innerHTML = ''; toast('Volviste al inicio: la foto se sacó de la presentación (queda en Supabase)');
+    })
     .subscribe(s => {
       log('rt', s);
       if (s === 'SUBSCRIBED') { st.rt = 'ok'; enviar('hola', {}); reenviarFoto(); }
@@ -403,10 +418,17 @@ function pintar() {
   else if (e.tipo === 'diapo0') { etq = 'DIAPOSITIVA 0'; pal = 'Inicio'; det = 'El reloj arranca con la primera palabra.'; sig = e.siguiente; }
   else if (e.tipo === 'fin') { etq = 'DIAPOSITIVA DE CIERRE'; pal = 'Cierre'; det = e.foto ? 'Con la foto del auditorio de fondo.' : 'Podés mandar la foto del auditorio.'; }
   else if (e.tipo === 'cierre') { etq = 'FRASES DE CIERRE'; pal = 'Cierre'; sig = e.siguiente; }
-  else { etq = `PARTE ${e.parte} · <b>${pad(e.n)}</b> / ${pad(e.total)}`; pal = e.palabra; det = e.img ? `Imagen <b>${e.img.k}</b> / ${e.img.n}` : ''; sig = e.siguiente; }
+  else { etq = `PARTE ${e.parte} · <b>${pad(e.n)}</b> / ${pad(e.total)}` + (e.numeracion && e.numero ? ` · #${e.numero}` : ''); pal = e.palabra; det = e.img ? `Imagen <b>${e.img.k}</b> / ${e.img.n}` : ''; sig = e.siguiente; }
   $('etq').innerHTML = etq;
   P.textContent = pal; P.className = e.tipo === 'palabra' ? '' : 'gris';
   $('detalle').innerHTML = det;
+  // Caso del jefe: pastilla visible o pausa automática
+  const cb = $('casoBox');
+  if (e.caso) { cb.innerHTML = '<div class="banda-caso">🎙 CASO EN PAUSA · <b></b><br><span style="font-weight:500">Cuando termine, ▶ para seguir</span></div>'; cb.querySelector('b').textContent = e.caso; }
+  else if (e.pastilla) { cb.innerHTML = '<span class="chip-caso">🎙 <span></span></span> <span style="font-size:.8rem;color:var(--muted)">pausa al final de esta imagen</span>'; cb.querySelector('.chip-caso span').textContent = e.pastilla; }
+  else cb.innerHTML = '';
+  const bn = $('bNum'); bn.classList.toggle('on', !!e.numeracion);
+  bn.textContent = '# Numeración de pantallas: ' + (e.numeracion ? 'encendida' + (e.numero ? ' (#' + e.numero + ')' : '') : 'apagada');
   $('siguiente').innerHTML = sig ? 'Siguiente: <b></b>' : ''; if (sig) $('siguiente').querySelector('b').textContent = sig;
   const r = e.tipo === 'palabra' ? (e.r || 0) : 0;
   $('riel').hidden = e.tipo !== 'palabra';
@@ -522,6 +544,7 @@ window.addEventListener('load', async () => {
   $('bSig').onclick = () => cmd('sig');
   document.querySelectorAll('#seg3 button').forEach(b => b.onclick = () => cmd('reloj', b.dataset.reloj));
   document.querySelectorAll('#partes button').forEach(b => b.onclick = () => cmd('parte', b.dataset.parte));
+  $('bNum').onclick = () => cmd('numeracion', !(st.est && st.est.numeracion));
   $('btnFoto').onclick = () => $('archivoFoto').click();
   $('archivoFoto').onchange = () => { tomarFoto($('archivoFoto').files[0]); $('archivoFoto').value = ''; };
   $('hMenu').onclick = menu;
