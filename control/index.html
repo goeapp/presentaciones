@@ -8,6 +8,7 @@
 <title>PresIA · Control</title>
 <!--
   control/index.html — PresIA · Control desde el celular v1.0.1 (19-nov-2026)
+  v1.0.4 — botón de foto fijo arriba; aviso de vibración ajustable (barra de 30 % a 90 %, arranca en 60 %, se recuerda).
   v1.0.3 — vibración: doble corta al pasar el 80 % de cada lapso, larga cuando se pausa sola por un caso; interruptor (recuerda el estado).
   v1.0.2 — pastilla del caso y aviso "Caso en pausa"; botón de numeración de pantallas; si la presentación
            vuelve a la diapositiva 0, olvida la foto (en Supabase queda guardada).
@@ -112,6 +113,8 @@ button{cursor:pointer}
 #fotoEst{display:flex;align-items:center;gap:12px;margin-top:10px;font-size:.85rem;color:var(--muted)}
 #fotoEst img{width:64px;height:48px;object-fit:cover;border-radius:8px}
 #fotoEst:empty{display:none}
+#tFoto{position:sticky;top:-14px;z-index:4;padding:12px;margin-top:-2px;box-shadow:0 10px 20px rgba(11,18,32,.85)}   /* fijo arriba */
+#tFoto #fotoEst{margin-top:8px}
 #casoBox:empty{display:none}
 #casoBox{margin-top:10px}
 .chip-caso{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:var(--degrade);color:#fff;font-weight:700;font-size:.9rem}
@@ -121,6 +124,9 @@ button{cursor:pointer}
 #bNum.on{border-color:var(--accent);color:var(--accent2)}
 #bVib{width:100%;margin-top:8px;padding:10px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);font-weight:600;font-size:.86rem;color:var(--muted)}
 #bVib.on{border-color:var(--accent);color:var(--accent2)}
+.aviso-fila{margin-top:10px;font-size:.84rem;color:var(--muted)}
+.aviso-fila b{color:var(--accent2)}
+.aviso-fila input{width:100%;margin-top:6px;accent-color:var(--accent);height:28px}
 
 /* Botones grandes abajo */
 #pie{position:fixed;left:0;right:0;bottom:0;height:var(--pie);padding:10px 12px calc(10px + env(safe-area-inset-bottom));display:grid;grid-template-columns:1fr 1.25fr 1fr;gap:10px;
@@ -202,10 +208,9 @@ button{cursor:pointer}
     <button class="hb" id="hMenu" type="button" title="Menú">⋮</button>
   </header>
   <main id="cuerpo">
-    <section class="tarjeta">
+    <section class="tarjeta" id="tFoto" title="La foto aparece de fondo en la diapositiva de cierre. Queda guardada en Supabase (Storage → pres).">
       <button id="btnFoto" type="button">📷 Foto del auditorio</button>
       <div id="fotoEst"></div>
-      <div class="nota" style="font-size:.76rem;color:var(--muted);margin-top:8px">La foto aparece de fondo en la diapositiva de cierre. Queda guardada en Supabase (Storage → pres).</div>
     </section>
     <section class="tarjeta" id="tActual">
       <div class="etq" id="etq">—</div>
@@ -231,6 +236,8 @@ button{cursor:pointer}
       </div>
       <button id="bNum" type="button"># Numeración de pantallas: apagada</button>
       <button id="bVib" type="button">📳 Vibración: encendida</button>
+      <div class="aviso-fila"><span>Avisar al <b id="avisoPct">60 %</b> de cada lapso</span>
+        <input type="range" id="avisoRango" min="30" max="90" step="10" value="60"></div>
     </section>
     <section class="tarjeta">
       <div class="lbl">Ayuda memoria</div>
@@ -253,7 +260,7 @@ button{cursor:pointer}
 /* ════════════════════════════════════════════════════════
    CONFIGURACIÓN (la misma conexión que M2 / PWAgoe)
 ════════════════════════════════════════════════════════ */
-const VERSION_UI     = 'v1.0.3';
+const VERSION_UI     = 'v1.0.4';
 const SUPABASE_URL   = 'https://uhuftsxrzwhmvzygcuvp.supabase.co';
 const SUPABASE_KEY   = 'sb_publishable_TCibRAnzgaDIbn_MIirw6w_FltKG8X3';
 const REDIRECT_MAIL  = 'https://goeapp.github.io/presentaciones/';   // = goe_apps.url de "pres": la plantilla del mail pone "PRESIA"
@@ -261,7 +268,7 @@ const EMAIL_SUGERIDO = 'goecdg@gmail.com';
 const BUCKET         = 'pres';
 const FOTO_MAX_PX    = 1920, FOTO_CALIDAD = 0.85, FOTO_ENLACE_S = 6 * 3600;
 const LATIDO_MS = 4000, SIN_ESTADO_MS = 5000;
-const LS = { codigo: 'pres-codigo', vibrar: 'pres-vibrar' };
+const LS = { codigo: 'pres-codigo', vibrar: 'pres-vibrar', aviso: 'pres-aviso' };
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: 'pres-sb-auth' }
@@ -298,12 +305,12 @@ const pad = n => String(Math.floor(n)).padStart(2, '0');
 const mmss = s => pad(s / 60) + ':' + pad(s % 60);
 function vibrar() { try { navigator.vibrate && navigator.vibrate(12); } catch (e) { /* nada */ } }
 /* Avisos con vibración (Android): doble corta al pasar el 80 % de cada lapso; larga cuando se pausa sola por un caso */
-const AVISO = { activo: lsGet('pres-vibrar') !== '0', lapso: '', avisado: false, caso: '' };
+const AVISO = { activo: lsGet('pres-vibrar') !== '0', umbral: (Number(lsGet('pres-aviso')) || 60) / 100, lapso: '', avisado: false, caso: '' };
 function zumbar(patron) { if (!AVISO.activo) return; try { navigator.vibrate && navigator.vibrate(patron); } catch (e) { /* nada */ } }
 function revisarAvisos(e) {
   const lapso = e.tipo === 'palabra' ? e.n + '.' + (e.img ? e.img.k : 0) : '';
   if (lapso !== AVISO.lapso) { AVISO.lapso = lapso; AVISO.avisado = false; }
-  if (lapso && !AVISO.avisado && !e.caso && (e.r || 0) >= 0.8) { AVISO.avisado = true; zumbar([70, 90, 70]); }
+  if (lapso && !AVISO.avisado && !e.caso && (e.r || 0) >= AVISO.umbral) { AVISO.avisado = true; zumbar([70, 90, 70]); }
   if (e.caso && e.caso !== AVISO.caso) zumbar(650);
   AVISO.caso = e.caso || '';
 }
@@ -449,7 +456,7 @@ function pintar() {
   $('riel').hidden = e.tipo !== 'palabra';
   $('riel').querySelector('.pto').style.left = (r * 100) + '%';
   $('riel').querySelector('.lleno').style.width = (r * 100) + '%';
-  $('riel').classList.toggle('aviso', r >= .8);
+  $('riel').classList.toggle('aviso', r >= AVISO.umbral);
   document.body.classList.toggle('pausado', !!e.pausado);
   // Reloj
   const trans = e.trans || 0, resta = (e.plan || 360) - trans;
@@ -562,6 +569,9 @@ window.addEventListener('load', async () => {
   $('bNum').onclick = () => cmd('numeracion', !(st.est && st.est.numeracion));
   $('bVib').onclick = () => { AVISO.activo = !AVISO.activo; lsSet(LS.vibrar, AVISO.activo ? null : '0'); pintarVib(); if (AVISO.activo) zumbar(120); };
   pintarVib();
+  const rango = $('avisoRango');
+  rango.value = Math.round(AVISO.umbral * 100); $('avisoPct').textContent = rango.value + ' %';
+  rango.oninput = () => { AVISO.umbral = rango.value / 100; $('avisoPct').textContent = rango.value + ' %'; lsSet(LS.aviso, rango.value); AVISO.avisado = false; };
   $('btnFoto').onclick = () => $('archivoFoto').click();
   $('archivoFoto').onchange = () => { tomarFoto($('archivoFoto').files[0]); $('archivoFoto').value = ''; };
   $('hMenu').onclick = menu;
